@@ -11,10 +11,12 @@ A web application for searching and downloading DOD SBIR/STTR topics.
 
 ## Local Development
 
-1. Clone the repository:
+1. Clone the repository and move the main.py file to a src folder:
 ```bash
 git clone https://github.com/Modular-Misfits/dodsbirsttr-scraper.git
 cd dodsbirsttr-scraper
+mkdir src
+mv ./main.py ./src/main.py
 ```
 
 2. Install dependencies:

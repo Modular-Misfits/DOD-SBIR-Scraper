@@ -1,110 +1,71 @@
-<!DOCTYPE html><html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>DoD SBIR Topic Search</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            margin: 0;
-            padding: 0;
-        }
-        .container {
-            margin-top: 1in;
-            text-align: center;
-        }
-        .filters {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            margin: 20px auto;
-            max-width: 1200px;
-        }
-        .filter-group {
-            flex: 1 1 200px;
-            margin: 10px;
-            text-align: left;
-        }
-        .filter-group h3 {
-            margin-bottom: 5px;
-        }
-        .filter-option {
-            display: block;
-            margin: 2px 0;
-        }
-        .search-form {
-            margin-bottom: 20px;
-        }
-        .search-form input[type="text"] {
-            padding: 8px;
-            width: 300px;
-        }
-        .search-form input[type="submit"] {
-            padding: 8px 16px;
-        }
-        table {
-            width: 95%;
-            margin: 20px auto;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 8px;
-            border: 1px solid #ccc;
-            text-align: left;
-        }
-        th {
-            background-color: #f2f2f2;
-        }
-        .pagination {
-            text-align: center;
-            margin: 10px;
-        }
-        .error {
-            color: red;
-            font-weight: bold;
-            text-align: center;
-        }
-        .table-controls {
-            width: 95%;
-            margin: 10px auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-    </style>
-</head>
-<body>
-<div class="container">
-    <h1>DoD SBIR Topic Search</h1>
-    <form class="search-form" method="GET" action="/">
-        <input type="text" name="term" placeholder="Enter search term" value="{{ term or '' }}">
-        <input type="submit" value="Search">
-    </form>
-</div>
-<form method="GET" action="/">
-    <div class="filters">
-        {% for group in [
-            ("Program", programs, "program", selected_programs),
-            ("Component", components, "component", selected_components),
-            ("Technology Areas", technology_areas, "technology_area", selected_technology_areas),
-            ("Modernization Priorities", modernization_priorities, "modernization_priority", selected_modernization_priorities),
-            ("Solicitation", solicitations, "solicitation", selected_solicitations),
-            ("Topic Status", topic_statuses, "topic_status", selected_topic_statuses)
-        ] %}
-        <div class="filter-group">
-            <h3>{{ group[0] }}</h3>
-            {% for option in group[1] %}
-            <label class="filter-option">
-                <input type="checkbox" name="{{ group[2] }}" value="{{ option }}"
-                    {% if option in group[3] %}checked{% endif %}>
-                {{ option }}
-            </label>
-            {% endfor %}
-        </div>
-        {% endfor %}
-    </div>
-    <div style="text-align: center; margin-bottom: 20px;">
-        <input type="submit" value="Apply Filters">
-    </div>
-</form>
-</body>
-</html>
+import fastapi from fastapi import Request, Form, Query from fastapi.responses import HTMLResponse, StreamingResponse from fastapi.templating import Jinja2Templates from fastapi.staticfiles import StaticFiles import httpx import os import json import urllib.parse import io import zipfile from typing import List, Optional from math import ceil
+
+BASE_DIR = os.path.dirname(os.path.abspath(file))
+
+app = fastapi.FastAPI() templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "..", "templates")) app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "..", "static")), name="static")
+
+SEARCH_API = "https://www.dodsbirsttr.mil/topics/api/public/topics/search" PDF_API_TEMPLATE = "https://www.dodsbirsttr.mil/topics/api/public/topics/{topic_uid}/download/PDF" QUESTIONS_API_TEMPLATE = "https://www.dodsbirsttr.mil/topics/api/public/topics/{topic_uid}/questions"
+
+PROGRAMS = ["SBIR", "STTR"] COMPONENTS = ["ARMY", "CBD", "DARPA", "DHA", "MDA", "DTRA", "DMEA", "DLA", "NAVY", "OSD", "SOCOM", "USAF"] TECHNOLOGY_AREAS = ["TA" + str(i) for i in range(1, 14)] MODERNIZATION_PRIORITIES = ["AI", "Cyber", "Quantum", "Hypersonics", "5G", "Biotech"] TOPIC_STATUSES = ["Pre-Release", "Open", "Closed"]
+
+dynamic_solicitations = []
+
+async def query_api(term: Optional[str], page: int, page_size: int, filters: dict) -> tuple: payload = { "searchText": term if term else None, "components": filters.get("component"), "programYear": None, "solicitationCycleNames": ["openTopics"], "releaseNumbers": [], "topicReleaseStatus": [591, 592] if not filters.get("topic_status") else None, "modernizationPriorities": filters.get("modernization_priority"), "sortBy": "finalTopicCode,asc", "technologyAreaIds": filters.get("technology_area"), "component": filters.get("component"), "program": filters.get("program") }
+
+encoded = urllib.parse.quote(json.dumps(payload))
+url = f"{SEARCH_API}?searchParam={encoded}&size={page_size}&page={page}"
+
+async with httpx.AsyncClient(timeout=30.0) as client:
+    resp = await client.get(url)
+    resp.raise_for_status()
+    data = resp.json()
+
+total = data.get("total", 0)
+topics = data.get("data", [])
+has_more = (page + 1) * page_size < total
+total_pages = ceil(total / page_size) if page_size else 1
+return topics, total, has_more, total_pages
+
+async def get_solicitations() -> List[str]: seen = set() page = 0 while True: try: topics, _, has_more, _ = await query_api(None, page, 100, {}) for topic in topics: title = topic.get("solicitationTitle") if title: seen.add(title) if not has_more: break page += 1 except Exception: break return sorted(seen)
+
+@app.on_event("startup") async def preload_solicitations(): global dynamic_solicitations dynamic_solicitations = await get_solicitations()
+
+@app.get("/", response_class=HTMLResponse) async def index( request: Request, term: Optional[str] = Query(None), page: int = Query(0, ge=0), page_size: int = Query(10, ge=1, le=100), program: Optional[List[str]] = Query(None), component: Optional[List[str]] = Query(None), technology_area: Optional[List[str]] = Query(None), modernization_priority: Optional[List[str]] = Query(None), solicitation: Optional[List[str]] = Query(None), topic_status: Optional[List[str]] = Query(None) ): topics = [] total_pages = 1 has_more_pages = False error_message = None
+
+filters = {
+    "program": program,
+    "component": component,
+    "technology_area": technology_area,
+    "modernization_priority": modernization_priority,
+    "solicitation": solicitation,
+    "topic_status": topic_status
+}
+
+try:
+    topics, total, has_more_pages, total_pages = await query_api(term, page, page_size, filters)
+except Exception as e:
+    error_message = f"Error querying API: {e}"
+
+return templates.TemplateResponse("index.html", {
+    "request": request,
+    "topics": topics,
+    "term": term,
+    "page": page,
+    "page_size": page_size,
+    "has_more": has_more_pages,
+    "total_pages": total_pages,
+    "error": error_message,
+    "programs": PROGRAMS,
+    "components": COMPONENTS,
+    "technology_areas": TECHNOLOGY_AREAS,
+    "modernization_priorities": MODERNIZATION_PRIORITIES,
+    "solicitations": dynamic_solicitations,
+    "topic_statuses": TOPIC_STATUSES,
+    "selected_programs": program or [],
+    "selected_components": component or [],
+    "selected_technology_areas": technology_area or [],
+    "selected_modernization_priorities": modernization_priority or [],
+    "selected_solicitations": solicitation or [],
+    "selected_topic_statuses": topic_status or []
+})
+

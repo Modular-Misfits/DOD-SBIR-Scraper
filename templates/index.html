@@ -1,72 +1,110 @@
-<!-- templates/index.html -->
-<!DOCTYPE html>
-<html>
+<!DOCTYPE html><html lang="en">
 <head>
-    <title>DoD SBIR Topic Search (FastAPI)</title>
+    <meta charset="UTF-8">
+    <title>DoD SBIR Topic Search</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #f2f2f2; }
-        .error { color: red; font-weight: bold; }
-        .pagination { margin-top: 20px; }
-        .pagination a, .pagination span { margin-right: 10px; }
-        input[type="text"], input[type="submit"] { padding: 8px; margin-right: 5px; }
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            margin-top: 1in;
+            text-align: center;
+        }
+        .filters {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin: 20px auto;
+            max-width: 1200px;
+        }
+        .filter-group {
+            flex: 1 1 200px;
+            margin: 10px;
+            text-align: left;
+        }
+        .filter-group h3 {
+            margin-bottom: 5px;
+        }
+        .filter-option {
+            display: block;
+            margin: 2px 0;
+        }
+        .search-form {
+            margin-bottom: 20px;
+        }
+        .search-form input[type="text"] {
+            padding: 8px;
+            width: 300px;
+        }
+        .search-form input[type="submit"] {
+            padding: 8px 16px;
+        }
+        table {
+            width: 95%;
+            margin: 20px auto;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 8px;
+            border: 1px solid #ccc;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .pagination {
+            text-align: center;
+            margin: 10px;
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+            text-align: center;
+        }
+        .table-controls {
+            width: 95%;
+            margin: 10px auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
     </style>
 </head>
 <body>
-    <h1>DoD SBIR Topic Search (FastAPI)</h1>
-    <form method="GET" action="/">
-        <label>Search Term:</label>
-        <input type="text" name="term" value="{{ term or '' }}">
+<div class="container">
+    <h1>DoD SBIR Topic Search</h1>
+    <form class="search-form" method="GET" action="/">
+        <input type="text" name="term" placeholder="Enter search term" value="{{ term or '' }}">
         <input type="submit" value="Search">
     </form>
-    {% if error %}
-    <p class="error">{{ error }}</p>
-    {% endif %}
-    {% if topics is not none %}
-        {% if topics %}
-        <form method="POST" action="/download">
-            <input type="hidden" name="term" value="{{ term or '' }}">
-            <input type="hidden" name="page" value="{{ page }}">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Select</th>
-                        <th>Code</th>
-                        <th>Title</th>
-                        <th>Component</th>
-                        <th>Status</th>
-                        <th>Solicitation</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for topic in topics %}
-                    <tr>
-                        <td><input type="checkbox" name="selected" value="{{ topic['topicCode'] }}"></td>
-                        <td>{{ topic['topicCode'] }}</td>
-                        <td>{{ topic['topicTitle'] }}</td>
-                        <td>{{ topic['component'] }}</td>
-                        <td>{{ topic['topicStatus'] }}</td>
-                        <td>{{ topic['solicitationTitle'] }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            <input type="submit" value="Download Selected PDFs">
-        </form>
-        <div class="pagination">
-            {% if page > 0 %}
-                <a href="/?term={{ term or '' }}&page={{ page - 1 }}">Previous</a>
-            {% endif %}
-            <span style="margin: 0 10px;">Page {{ page + 1 }}</span>
-            {% if has_more %}
-                <a href="/?term={{ term or '' }}&page={{ page + 1 }}">Next</a>
-            {% endif %}
+</div>
+<form method="GET" action="/">
+    <div class="filters">
+        {% for group in [
+            ("Program", programs, "program", selected_programs),
+            ("Component", components, "component", selected_components),
+            ("Technology Areas", technology_areas, "technology_area", selected_technology_areas),
+            ("Modernization Priorities", modernization_priorities, "modernization_priority", selected_modernization_priorities),
+            ("Solicitation", solicitations, "solicitation", selected_solicitations),
+            ("Topic Status", topic_statuses, "topic_status", selected_topic_statuses)
+        ] %}
+        <div class="filter-group">
+            <h3>{{ group[0] }}</h3>
+            {% for option in group[1] %}
+            <label class="filter-option">
+                <input type="checkbox" name="{{ group[2] }}" value="{{ option }}"
+                    {% if option in group[3] %}checked{% endif %}>
+                {{ option }}
+            </label>
+            {% endfor %}
         </div>
-        {% else %}
-        <p>No topics found for this search term.</p>
-        {% endif %}
-    {% endif %}
+        {% endfor %}
+    </div>
+    <div style="text-align: center; margin-bottom: 20px;">
+        <input type="submit" value="Apply Filters">
+    </div>
+</form>
 </body>
 </html>

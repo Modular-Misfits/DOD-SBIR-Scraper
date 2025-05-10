@@ -8,8 +8,11 @@ A web application for searching and downloading DOD SBIR/STTR topics.
 - Download individual PDFs directly to your browser
 - Download multiple PDFs as a ZIP file
 - Pagination support
+- Modern, responsive UI
 
 ## Local Development
+
+### Backend Setup
 
 1. Clone the repository:
 ```bash
@@ -22,12 +25,34 @@ cd dodsbirsttr-scraper
 pip install -r requirements.txt
 ```
 
-3. Run the development server:
+3. Run the backend server:
 ```bash
-uvicorn src.main:app --reload
+uvicorn app.main:app --reload
 ```
 
-4. Open http://localhost:8000 in your browser
+### Frontend Setup
+
+1. Navigate to the frontend directory:
+```bash
+cd frontend
+```
+
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Create a `.env` file in the frontend directory with:
+```
+VITE_API_URL=http://localhost:8000/api/v1
+```
+
+4. Run the development server:
+```bash
+npm run dev
+```
+
+5. Open http://localhost:5173 in your browser
 
 ## Deployment
 
@@ -41,7 +66,7 @@ This application is configured to deploy automatically to Render when changes ar
 4. Use the following settings:
    - Environment: Python
    - Build Command: `pip install -r requirements.txt`
-   - Start Command: `uvicorn src.main:app --host 0.0.0.0 --port $PORT`
+   - Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
 ### Automatic Deployment
 

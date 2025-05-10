@@ -13,7 +13,7 @@ A web application for searching and downloading DOD SBIR/STTR topics.
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/dodsbirsttr-scraper.git
+git clone https://github.com/Modular-Misfits/dodsbirsttr-scraper.git
 cd dodsbirsttr-scraper
 ```
 

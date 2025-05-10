@@ -1,101 +1,137 @@
 import fastapi
 from fastapi import Request, Form, Query
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-import httpx # Asynchronous HTTP client
+from fastapi.staticfiles import StaticFiles
+import httpx
 import os
 import json
-import urllib.parse # For URL encoding
-import aiofiles # For async file operations
+import urllib.parse
 import io
 import zipfile
-from typing import List
+from typing import List, Optional
+from math import ceil
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 app = fastapi.FastAPI()
-
-# Setup templates
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "..", "templates"))
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "..", "static")), name="static")
 
 SEARCH_API = "https://www.dodsbirsttr.mil/topics/api/public/topics/search"
 PDF_API_TEMPLATE = "https://www.dodsbirsttr.mil/topics/api/public/topics/{topic_uid}/download/PDF"
+QUESTIONS_API_TEMPLATE = "https://www.dodsbirsttr.mil/topics/api/public/topics/{topic_uid}/questions"
 
-# Create downloads directory if it doesn't exist
-os.makedirs('downloads', exist_ok=True)
+# Static option values
+PROGRAMS = ["SBIR", "STTR"]
+COMPONENTS = ["ARMY", "CBD", "DARPA", "DHA", "MDA", "DTRA", "DMEA", "DLA", "NAVY", "OSD", "SOCOM", "USAF"]
+TECH_AREAS = ["TA1", "TA2", "TA3", "TA4", "TA5", "TA6", "TA7", "TA8", "TA9", "TA10", "TA11", "TA12", "TA13"]
+MOD_PRIORITIES = ["AI", "Cyber", "Quantum", "Hypersonics", "5G", "Biotech"]  # Replace with real mappings if needed
+SOLICITATIONS = ["AF 24.1", "Navy FY24", "Army Open 2024"]  # Stubbed – you'll need to map this from live data if needed
+TOPIC_STATUSES = ["Pre-Release", "Open", "Closed"]
 
-async def query_api(term: str | None, page: int):
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36", # More common UA
-            "Referer": "https://www.dodsbirsttr.mil/topics-app/",
-            "Accept": "application/json, text/plain, */*",
-            "Content-Type": "application/json"
-        }
-        search_payload = {
-            "searchText": term if term else None,
-            "components": None,
-            "programYear": None,
-            "solicitationCycleNames": ["openTopics"], # Consider making this configurable or broader
-            "releaseNumbers": [],
-            "topicReleaseStatus": [591, 592], # These might change, representing "Open" and "Pre-Release"
-            "modernizationPriorities": [],
-            "sortBy": "finalTopicCode,asc",
-            "technologyAreaIds": [],
-            "component": None,
-            "program": None
-        }
-        # Encode the search_payload correctly for the URL parameter
-        search_param_json = json.dumps(search_payload)
-        encoded_search_param = urllib.parse.quote(search_param_json)
-        
-        full_url = f"{SEARCH_API}?searchParam={encoded_search_param}&size=10&page={page}" # Reduced size for faster testing
+async def query_api(term: Optional[str], page: int, page_size: int) -> tuple:
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.dodsbirsttr.mil/topics-app/",
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "searchText": term if term else None,
+        "components": None,
+        "programYear": None,
+        "solicitationCycleNames": ["openTopics"],
+        "releaseNumbers": [],
+        "topicReleaseStatus": [591, 592],
+        "modernizationPriorities": [],
+        "sortBy": "finalTopicCode,asc",
+        "technologyAreaIds": [],
+        "component": None,
+        "program": None
+    }
 
-        async with httpx.AsyncClient(timeout=30.0) as client: # Added timeout
-            resp = await client.get(full_url, headers=headers)
-            resp.raise_for_status() # Will raise an httpx.HTTPStatusError for 4xx/5xx
-            result = resp.json()
-        
-        topics_data = result.get("data", [])
-        # The API returns totalElements and totalPages, use totalElements for better pagination logic
-        total_elements = result.get("total", 0) 
-        page_size = 10 # Should match the 'size' parameter above
-        has_more = (page + 1) * page_size < total_elements
-        
-        return topics_data, has_more
-    except httpx.HTTPStatusError as e:
-        error_detail = f"API request failed with status {e.response.status_code}."
-        try:
-            error_content = e.response.json()
-            error_detail += f" Response: {error_content}"
-        except json.JSONDecodeError:
-            error_detail += f" Response (text): {e.response.text}"
-        raise RuntimeError(error_detail)
-    except Exception as e:
-        raise RuntimeError(f"API query failed: {e}")
+    encoded = urllib.parse.quote(json.dumps(payload))
+    url = f"{SEARCH_API}?searchParam={encoded}&size={page_size}&page={page}"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+    total = data.get("total", 0)
+    topics = data.get("data", [])
+    has_more = (page + 1) * page_size < total
+    total_pages = ceil(total / page_size) if page_size else 1
+    return topics, total, has_more, total_pages
 
 @app.get("/", response_class=HTMLResponse)
 async def index(
     request: Request,
-    term: str | None = Query(None), # Optional query parameter
-    page: int = Query(0, ge=0)      # Query parameter with default 0, must be >= 0
+    term: Optional[str] = Query(None),
+    page: int = Query(0, ge=0),
+    page_size: int = Query(10, ge=1, le=100),
+    program: Optional[str] = Query(None),
+    component: Optional[str] = Query(None),
+    technology_area: Optional[str] = Query(None),
+    modernization_priority: Optional[str] = Query(None),
+    solicitation: Optional[str] = Query(None),
+    topic_status: Optional[str] = Query(None)
 ):
-    topics = None
-    error_message = None
+    topics = []
+    total_pages = 1
     has_more_pages = False
+    error_message = None
 
-    if term and term.strip():
-        try:
-            topics, has_more_pages = await query_api(term.strip(), page)
-        except RuntimeError as e:
-            error_message = str(e)
-            topics = [] # Ensure topics is an empty list on error to avoid template issues
-    
+    try:
+        topics, total, has_more_pages, total_pages = await query_api(term, page, page_size)
+    except Exception as e:
+        error_message = f"Error querying API: {e}"
+
     return templates.TemplateResponse("index.html", {
         "request": request,
         "topics": topics,
         "term": term,
-        "error": error_message,
         "page": page,
-        "has_more": has_more_pages
+        "page_size": page_size,
+        "has_more": has_more_pages,
+        "total_pages": total_pages,
+        "error": error_message,
+        "programs": PROGRAMS,
+        "components": COMPONENTS,
+        "technology_areas": TECH_AREAS,
+        "modernization_priorities": MOD_PRIORITIES,
+        "solicitations": SOLICITATIONS,
+        "topic_statuses": TOPIC_STATUSES,
+        "selected_program": program,
+        "selected_component": component,
+        "selected_technology_area": technology_area,
+        "selected_modernization_priority": modernization_priority,
+        "selected_solicitation": solicitation,
+        "selected_topic_status": topic_status
+    })
+
+@app.get("/questions/{topic_id}", response_class=HTMLResponse)
+async def view_questions(request: Request, topic_id: str):
+    questions_url = QUESTIONS_API_TEMPLATE.format(topic_uid=topic_id)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(questions_url)
+            response.raise_for_status()
+            questions = response.json()
+    except Exception as e:
+        return templates.TemplateResponse("questions.html", {
+            "request": request,
+            "topic_id": topic_id,
+            "error": str(e),
+            "questions": []
+        })
+
+    return templates.TemplateResponse("questions.html", {
+        "request": request,
+        "topic_id": topic_id,
+        "questions": questions,
+        "error": None
     })
 
 @app.post("/download")
@@ -103,63 +139,46 @@ async def download_selected_pdfs(
     request: Request,
     term: str = Form(...),
     page: int = Form(...),
-    selected: List[str] = Form(...) # List of selected topic codes
+    selected: List[str] = Form(...)
 ):
     try:
-        current_page_topics, _ = await query_api(term, page)
-        topic_map = {t['topicCode']: t for t in current_page_topics}
-    except RuntimeError as e:
+        topics, _, _, _ = await query_api(term, page, 10)
+        topic_map = {t['topicCode']: t for t in topics}
+    except Exception as e:
         return HTMLResponse(f"<h2>Error fetching topic list for download: {e}</h2><a href='/?term={term}&page={page}'>Back</a>")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Referer": "https://www.dodsbirsttr.mil/topics-app/"
-    }
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    # If only one file is selected, return it directly
     if len(selected) == 1:
         code = selected[0]
-        topic_detail = topic_map.get(code)
-        if not topic_detail:
-            return HTMLResponse(f"<h2>Topic code {code} not found in current page results.</h2><a href='/?term={term}&page={page}'>Back</a>")
-        
-        uid = topic_detail.get("topicId")
-        if not uid:
-            return HTMLResponse(f"<h2>UID not found for topic code {code}.</h2><a href='/?term={term}&page={page}'>Back</a>")
-
+        topic = topic_map.get(code)
+        if not topic:
+            return HTMLResponse(f"<h2>Topic code {code} not found.</h2>")
+        uid = topic.get("topicId")
         pdf_url = PDF_API_TEMPLATE.format(topic_uid=uid)
-        
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(pdf_url, headers=headers, follow_redirects=True)
-            response.raise_for_status()
-            
+            r = await client.get(pdf_url, headers=headers)
+            r.raise_for_status()
             return StreamingResponse(
-                io.BytesIO(response.content),
+                io.BytesIO(r.content),
                 media_type="application/pdf",
                 headers={"Content-Disposition": f'attachment; filename="{code}.pdf"'}
             )
 
-    # For multiple files, create a ZIP
     memory_file = io.BytesIO()
     with zipfile.ZipFile(memory_file, 'w') as zf:
         async with httpx.AsyncClient(timeout=60.0) as client:
             for code in selected:
-                topic_detail = topic_map.get(code)
-                if not topic_detail:
+                topic = topic_map.get(code)
+                if not topic:
                     continue
-                
-                uid = topic_detail.get("topicId")
-                if not uid:
-                    continue
-
+                uid = topic.get("topicId")
                 pdf_url = PDF_API_TEMPLATE.format(topic_uid=uid)
-                
                 try:
-                    response = await client.get(pdf_url, headers=headers, follow_redirects=True)
-                    response.raise_for_status()
-                    zf.writestr(f"{code}.pdf", response.content)
-                except Exception as e:
-                    print(f"Error downloading {code}: {e}")
+                    r = await client.get(pdf_url, headers=headers)
+                    r.raise_for_status()
+                    zf.writestr(f"{code}.pdf", r.content)
+                except Exception:
                     continue
 
     memory_file.seek(0)
@@ -169,9 +188,6 @@ async def download_selected_pdfs(
         headers={"Content-Disposition": 'attachment; filename="selected_pdfs.zip"'}
     )
 
-# For running with uvicorn:
-# uvicorn main:app --reload
 if __name__ == "__main__":
     import uvicorn
-    # This is for development only. For production, use a proper ASGI server like Uvicorn/Hypercorn directly.
     uvicorn.run(app, host="0.0.0.0", port=8000)
